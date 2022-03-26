@@ -80,9 +80,9 @@ public:
         if (addr > 0)
         {
             _i2c->SendAndRequestData((int8_t *)data,length,addr, 2, req_len);
-            return 1;
+            return 0;
         }
-        return 0;
+        return 2;
     }
 
     uint8_t Init(uint8_t resolution = 3)
@@ -255,7 +255,8 @@ public:
 	
 	uint8_t WriteAssetOrCRC(uint8_t asset_index, uint8_t *asset_data, uint16_t length){
 		uint32_t crc_read = 0;
-		if(Asset_CRC32(asset_index, length, &crc_read) == 0){
+		uint8_t crc_status = Asset_CRC32(asset_index, length, &crc_read);
+		if(crc_status == 0){
 			uint32_t crc_gen = crc32(asset_data,length);
 			if(crc_gen == crc_read)return 0;
 		}
@@ -267,7 +268,8 @@ public:
 		data[0] = 12;
 		data[1] = asset;
 		WriteU16ToArr(data,2,length);
-		if(SendRawCmdOutput(data,4,4)){
+		uint8_t output = SendRawCmdOutput(data,4,5);
+		if(output == 0){
 			if(_i2c->_wire->available() >= 4){
 				*out_crc = _i2c->_wire->read() << 24;
 				*out_crc |= _i2c->_wire->read() << 16;
@@ -284,7 +286,7 @@ public:
 	uint8_t Status(gcard_status *status){
 		uint8_t data[1];
 		data[0] = 253;
-		if(SendRawCmdOutput(data,1,2)){
+		if(SendRawCmdOutput(data,1,2) == 0){
 			if(_i2c->_wire->available()> 0){
 				status->initialized = _i2c->_wire->read();
 			}
