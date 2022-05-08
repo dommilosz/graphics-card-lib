@@ -13,6 +13,15 @@ struct gcard_status{
 	uint8_t last_asset_write_finished = 0;
 };
 
+struct object_info{
+	uint8_t type;
+	uint16_t x, y, w, h;
+	uint8_t color;
+	uint8_t visibility;
+	uint8_t code_asset, text_asset;
+	uint16_t code_pc;
+};
+
 #define WriteU16ToArr(arr, index, value) arr[index] = value >> 8; arr[index+1] = value & 0xFF;
 
 
@@ -32,6 +41,7 @@ public:
         if (addr > 0)
         {
             _i2c->SendAndRequestData((int8_t *)data,length,addr, 1, 1);
+			if(_i2c->_wire->available()<=0)return 255;
             return _i2c->_wire->read();
         }
         return 255;
@@ -142,6 +152,39 @@ public:
     uint8_t Objects_Create(uint8_t index,uint8_t type){
         return SendRawCmd(8,index,0,type);
     }
+	
+	uint8_t Objects_CreateIfNot(uint8_t index, uint8_t type){
+		object_info info;
+		uint8_t res = Objects_Info(index, &info);
+		if(res == 0){
+			if(info.type == type)return 250;
+			return Objects_Create(index,type);
+		}
+		if(res == 6){
+			return Objects_Create(index,type);
+		}
+		return res;
+	}
+	
+	uint8_t Objects_TextAssetIfNot(uint8_t index,uint8_t text){
+        object_info info;
+		uint8_t res = Objects_Info(index, &info);
+		if(res == 0){
+			if(info.text_asset == text)return 250;
+			return Objects_TextAsset(index,text);
+		}
+		return res;
+    }
+
+    uint8_t Objects_CodeAssetIfNot(uint8_t index,uint8_t code){
+        object_info info;
+		uint8_t res = Objects_Info(index, &info);
+		if(res == 0){
+			if(info.code_asset == code)return 250;
+			return Objects_CodeAsset(index,code);
+		}
+		return res;
+    }
 
     uint8_t Objects_Delete(uint8_t index){
         return SendRawCmd(8,index,1);
@@ -156,6 +199,23 @@ public:
         WriteU16ToArr(data,4,x);
         WriteU16ToArr(data,6,y);
         return SendRawCmd(data,8);
+    }
+	
+	uint8_t Objects_MoveIfNot(uint8_t index,uint8_t relative, int16_t x, int16_t y){
+		if(relative){
+			Serial.println("Move");
+			return Objects_Move(index, relative, x, y);
+		}
+		
+        object_info info;
+		uint8_t res = Objects_Info(index, &info);
+		
+		if(res == 0){
+			if(info.x == x && info.y == y)return 250;
+			Serial.println("Move");
+			return Objects_Move(index, relative, x, y);
+		}
+		return res;
     }
 
     uint8_t Objects_Color(uint8_t index, uint8_t color){
@@ -211,6 +271,11 @@ public:
     uint8_t Objects_CodeAsset(uint8_t index,uint8_t code){
         return SendRawCmd(8,index,11,code);
     }
+	
+	uint8_t Redraw(){
+        return SendRawCmd(13);
+    }
+
 
     uint8_t Objects_BlobAsset(uint8_t index,uint8_t code){
         return SendRawCmd(8,index,12,code);
@@ -253,14 +318,18 @@ public:
 		return 2;
     }
 	
-	uint8_t WriteAssetOrCRC(uint8_t asset_index, uint8_t *asset_data, uint16_t length){
+	uint8_t WriteAssetOrCRC(uint8_t asset_index, uint8_t *asset_data, uint16_t length, bool redraw = false){
 		uint32_t crc_read = 0;
 		uint8_t crc_status = Asset_CRC32(asset_index, length, &crc_read);
 		if(crc_status == 0){
 			uint32_t crc_gen = crc32(asset_data,length);
-			if(crc_gen == crc_read)return 0;
+			if(crc_gen == crc_read)return 250;
 		}
-		return WriteAsset(asset_index,asset_data,length);
+		uint8_t res = WriteAsset(asset_index,asset_data,length);
+		if(redraw){
+			Redraw();
+		}
+		return res;
 	}
 	
 	uint8_t Asset_CRC32(uint8_t asset,uint16_t length, uint32_t *out_crc){
@@ -287,10 +356,8 @@ public:
 		uint8_t data[1];
 		data[0] = 253;
 		if(SendRawCmdOutput(data,1,2) == 0){
-			if(_i2c->_wire->available()> 0){
+			if(_i2c->_wire->available()>= 2){
 				status->initialized = _i2c->_wire->read();
-			}
-			if(_i2c->_wire->available()> 0){
 				status->last_asset_write_finished = _i2c->_wire->read();
 			}
 			if(_i2c->_wire->available()> 0){
@@ -299,6 +366,42 @@ public:
 		}
 		return -1;
 	}
+	
+	uint8_t Objects_Info(uint8_t index, object_info *oi){
+		oi->type=255;
+		uint8_t data[3];
+		data[0] = 8;
+		data[1] = index;
+		data[2] = 254;
+		if(SendRawCmdOutput(data,3,16) == 0){
+			if(_i2c->_wire->available()>= 15){
+				oi->type = _i2c->_wire->read();
+				oi->x = (_i2c->_wire->read() << 8)|_i2c->_wire->read();
+				oi->y = (_i2c->_wire->read() << 8)|_i2c->_wire->read();
+				oi->w = (_i2c->_wire->read() << 8)|_i2c->_wire->read();
+				oi->h = (_i2c->_wire->read() << 8)|_i2c->_wire->read();
+				oi->color = _i2c->_wire->read();
+				oi->visibility = _i2c->_wire->read();
+				oi->code_asset = _i2c->_wire->read();
+				oi->text_asset = _i2c->_wire->read();
+				oi->code_pc = (_i2c->_wire->read() << 8)|_i2c->_wire->read();
+			}
+			if(_i2c->_wire->available()> 0){
+				return _i2c->_wire->read();
+			}
+		}
+		return 255;
+	}
+	
+	uint8_t IsConnected()
+    {
+        uint8_t addr = _i2c->GetAddrByID(30);
+        if (addr > 0)
+        {
+            return 1;
+        }
+        return 0;
+    }
 	
 	uint32_t crc32(const uint8_t *s, size_t n) {
   uint32_t crc = 0xFFFFFFFF;
